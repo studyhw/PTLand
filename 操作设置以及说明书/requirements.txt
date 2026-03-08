@@ -1,0 +1,6 @@
+rpyc==5.3.1
+psutil==5.9.8
+pysnmp==4.4.1
+pyasn1==0.4.8
+pyinstaller==6.4.0
+
