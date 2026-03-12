@@ -37,6 +37,7 @@ REG_AUTORUN_NAME = "PTLand"
 
 HEARTBEAT_INTERVAL = 5  # 秒
 RPC_RECONNECT_INTERVAL = 5  # 秒
+RPC_REQUEST_TIMEOUT = 10  # 秒
 STATE_LOOP_INTERVAL_IDLE = 10  # 秒
 STATE_LOOP_INTERVAL_DISCHARGING = 30  # 秒
 STATE_LOOP_INTERVAL_CHARGING = 30  # 秒
@@ -50,6 +51,14 @@ STATE_DISCHARGING = "DISCHARGING"
 STATE_WAITING_S5 = "WAITING_S5"
 STATE_CHARGING = "CHARGING"
 STATE_STOPPED = "STOPPED"
+
+VALID_STATES = {
+    STATE_IDLE,
+    STATE_DISCHARGING,
+    STATE_WAITING_S5,
+    STATE_CHARGING,
+    STATE_STOPPED,
+}
 
 
 def setup_logging() -> None:
@@ -99,7 +108,14 @@ class RPCClient(object):
                     continue
                 try:
                     logging.info("尝试连接 Server：%s:18861", server_ip)
-                    conn = rpyc.connect(server_ip, 18861, config={"allow_public_attrs": True})
+                    conn = rpyc.connect(
+                        server_ip,
+                        18861,
+                        config={
+                            "allow_public_attrs": True,
+                            "sync_request_timeout": RPC_REQUEST_TIMEOUT,
+                        },
+                    )
                     with self._lock:
                         self._conn = conn
                     logging.info("已连接到 Server")
@@ -235,7 +251,8 @@ class AppConfig(object):
             cfg.current_cycle = int(data.get("current_cycle", 0))
         except Exception:
             cfg.current_cycle = 0
-        cfg.state = str(data.get("state", STATE_IDLE))
+        state = str(data.get("state", STATE_IDLE))
+        cfg.state = state if state in VALID_STATES else STATE_IDLE
         return cfg
 
     def load(self, path: str = CONFIG_FILE) -> None:
@@ -454,7 +471,7 @@ class PTLandLogic(object):
             try:
                 name = (proc.info.get("name") or "").lower()
                 exe = (proc.info.get("exe") or "").lower()
-                if any(t.lower() in (name, exe) for t in target_names):
+                if any(t.lower() in name or t.lower() in exe for t in target_names):
                     self.log(f"终止进程：PID={proc.pid}, Name={proc.info.get('name')}")
                     proc.kill()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -467,6 +484,9 @@ class PTLandLogic(object):
             self.log("ECTool 路径未配置，跳过启动")
             return
         exe_path = self.cfg.ectool_path
+        if not os.path.isfile(exe_path):
+            self.log(f"ECTool 路径不存在或不是文件：{exe_path}")
+            return
         cwd = os.path.dirname(exe_path) or "."
         self.log(f"启动 ECTool：{exe_path}")
         try:
@@ -485,6 +505,9 @@ class PTLandLogic(object):
             self.log("BurnInTest 路径未配置，跳过启动")
             return
         exe_path = self.cfg.bit_path
+        if not os.path.isfile(exe_path):
+            self.log(f"BurnInTest 路径不存在或不是文件：{exe_path}")
+            return
         cwd = os.path.dirname(exe_path) or "."
         self.log(f"启动 BurnInTest：{exe_path} /r /D 0")
         try:
@@ -809,4 +832,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

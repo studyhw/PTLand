@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from pysnmp.proto.rfc1902 import Integer  # type: ignore[import-not-found]
+
 from pysnmp.hlapi import (  # type: ignore[import-not-found]
     CommunityData,
     ContextData,
@@ -49,6 +51,8 @@ SYS_NAME_OID = "1.3.6.1.2.1.1.5.0"
 #   "1.3.6.1.4.1.xxx.yyy.1.3.{index}.0"
 PDU_OUTLET_ON_OID_TEMPLATE = "1.3.6.1.4.1.xxxx.yyyy.1.1.{index}"
 PDU_OUTLET_OFF_OID_TEMPLATE = "1.3.6.1.4.1.xxxx.yyyy.1.1.{index}"
+
+PLACEHOLDER_OID_MARKER = "xxxx.yyyy"
 
 # 设置开关量时写入的值（常见情况是 1/on, 0/off，或者 1/2）
 PDU_ON_VALUE = 1
@@ -85,6 +89,12 @@ class PDUController:
         self.port = port
         self.timeout = timeout
         self.retries = retries
+
+        if outlet_index <= 0:
+            raise ValueError("outlet_index 必须是大于 0 的整数")
+
+        if PLACEHOLDER_OID_MARKER in PDU_OUTLET_ON_OID_TEMPLATE or PLACEHOLDER_OID_MARKER in PDU_OUTLET_OFF_OID_TEMPLATE:
+            raise ValueError("请先在 pdusnmp.py 中配置真实的 PDU OID 模板，再运行程序")
 
     # ===== 对上层暴露的 API =====
 
@@ -142,7 +152,7 @@ class PDUController:
                 retries=self.retries,
             ),
             ContextData(),
-            ObjectType(ObjectIdentity(oid), int(value)),
+            ObjectType(ObjectIdentity(oid), Integer(int(value))),
         )
 
         error_indication, error_status, error_index, _var_binds = next(iterator)

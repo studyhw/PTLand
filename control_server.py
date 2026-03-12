@@ -26,11 +26,13 @@ import rpyc
 from pdusnmp import PDUController  # type: ignore
 
 SERVER_TITLE = "PTLand_Server"
-PDU_IP = "192.168.0.163"
-PDU_OUTLET_INDEX = 1
+PDU_IP = os.getenv("PTLAND_PDU_IP", "192.168.0.163")
+PDU_OUTLET_INDEX = int(os.getenv("PTLAND_PDU_OUTLET_INDEX", "1"))
 
 HEARTBEAT_TIMEOUT_SECONDS = 30
 POWER_ON_DELAY_AFTER_TIMEOUT = 30  # 额外等待 30s 再上电，确保完全掉电
+POWER_OPERATION_RETRIES = 3
+POWER_RETRY_INTERVAL_SECONDS = 2
 
 
 def setup_logging() -> None:
@@ -51,6 +53,30 @@ class PTLandState(object):
         self.watchdog_enabled: bool = False
         self.lock = threading.Lock()
         self._stop_event = threading.Event()
+
+    def safe_power_on(self) -> bool:
+        for attempt in range(1, POWER_OPERATION_RETRIES + 1):
+            try:
+                self.pdu.power_on()
+                logging.info("PDU 插座已上电")
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logging.error("执行 PDU Power ON 失败（第 %d/%d 次）：%s", attempt, POWER_OPERATION_RETRIES, exc)
+                if attempt < POWER_OPERATION_RETRIES:
+                    time.sleep(POWER_RETRY_INTERVAL_SECONDS)
+        return False
+
+    def safe_power_off(self) -> bool:
+        for attempt in range(1, POWER_OPERATION_RETRIES + 1):
+            try:
+                self.pdu.power_off()
+                logging.info("PDU 插座已断电")
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logging.error("执行 PDU Power OFF 失败（第 %d/%d 次）：%s", attempt, POWER_OPERATION_RETRIES, exc)
+                if attempt < POWER_OPERATION_RETRIES:
+                    time.sleep(POWER_RETRY_INTERVAL_SECONDS)
+        return False
 
     def update_heartbeat(self) -> None:
         with self.lock:
@@ -105,11 +131,7 @@ class PTLandService(rpyc.Service):
         客户端请求断电（开始放电过程）。
         """
         logging.info("收到客户端断电请求：执行 PDU Power OFF，并启用看门狗")
-        try:
-            self.state.pdu.power_off()
-            logging.info("PDU 插座已断电")
-        except Exception as exc:  # noqa: BLE001
-            logging.error("执行 PDU Power OFF 失败：%s", exc)
+        self.state.safe_power_off()
         self.state.enable_watchdog()
 
     def exposed_request_power_on(self) -> None:
@@ -117,11 +139,7 @@ class PTLandService(rpyc.Service):
         客户端请求上电（例如充电阶段或开机双重保险）。
         """
         logging.info("收到客户端上电请求：执行 PDU Power ON")
-        try:
-            self.state.pdu.power_on()
-            logging.info("PDU 插座已上电")
-        except Exception as exc:  # noqa: BLE001
-            logging.error("执行 PDU Power ON 失败：%s", exc)
+        self.state.safe_power_on()
         # 上电后可以关闭看门狗，避免误触发
         self.state.disable_watchdog()
 
@@ -175,11 +193,8 @@ def watchdog_loop(state: PTLandState) -> None:
                     return
                 time.sleep(1.0)
 
-            try:
-                state.pdu.power_on()
+            if state.safe_power_on():
                 logging.info("PDU 已上电，等待客户端重新开机并恢复测试")
-            except Exception as exc:  # noqa: BLE001
-                logging.error("执行 PDU Power ON 失败：%s", exc)
 
 
 def main() -> None:
@@ -240,4 +255,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
